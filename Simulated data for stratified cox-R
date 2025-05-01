@@ -1,0 +1,120 @@
+# Load required library
+library(survival)
+
+# Simulate data
+set.seed(123)
+n <- 100  # Number of patients
+max_time <- 3000  # Maximum follow-up time
+
+# Initialize data frame
+data <- data.frame(id = integer(), start = double(), stop = double(), rehospitalization = integer(), 
+                   antipsychotics = factor(), AP_specifics = factor(), mood_stabilizers = integer(), 
+                   clozapine = integer(), dose_group = factor(), age = integer(),
+                   i_start = double(), i_stop = double())
+
+# Generate initial medication use and dose group
+generate_medication <- function() {
+  antipsychotic <- sample(c("AAP", "ATP", "LAI"), 1)
+  AP_specific <- ifelse(antipsychotic == "AAP", sample(c("CPZ", "Haloperidol", "LPZ", 'Perphenazine', 'Pimozide', 'Sulpiride'), 1), 
+                        ifelse(antipsychotic == "ATP", sample(c('Zotepin', 'Clozapine', 'Olanzapine', 'Risperidone', 'Quetiapine', 'Amisulpride','Aripiprazole', 'Ziprasidone', 'Paliperidone', 'Blonanserin'), 1), 
+                               sample(c('LAI_Halo', 'LAI_Risperidone', 'LAI_Aripiprazole', 'LAI_Paliperidone'), 1)))
+  list(antipsychotic = antipsychotic, AP_specific = AP_specific)
+}
+
+mood_stabilizers <- rbinom(n, 1, 0.5)
+clozapine <- rbinom(n, 1, 0.5)
+dose_group <- sample(c("low", "medium", "high"), n, replace = TRUE)
+age <- sample(15:65, n, replace = TRUE)
+
+# Define IDs that will have multiple events
+multiple_event_ids <- sample(1:n, size = round(0.3 * n))  # 30% of patients
+
+# Generate follow-up data
+for (i in 1:n) {
+  current_time <- 0
+  medication <- generate_medication()
+  initial_age <- age[i]  # Save initial age
+  cumulative_time <- 0  # Initialize cumulative time for each patient
+  
+  while (current_time < max_time) {
+    start_time <- current_time
+    interval_duration <- sample(50:100, 1)
+    stop_time <- start_time + interval_duration
+    
+    # Ensure stop_time is always greater than start_time
+    if (stop_time == start_time) {
+      stop_time <- start_time + 1
+    }
+    
+    # Update cumulative i_start and i_stop
+    i_start <- cumulative_time
+    i_stop <- cumulative_time + interval_duration
+    
+    # Update cumulative time
+    cumulative_time <- i_stop
+    
+    # Update age if i_start exceeds 365.5 days
+    age_adjusted <- initial_age + floor(i_start / 365.5)
+    
+    # Determine if an event should occur
+    if (i %in% multiple_event_ids) {
+      event <- rbinom(1, 1, 0.3)  # Higher probability for multiple event patients
+    } else {
+      event <- rbinom(1, 1, 0.1)  # Lower probability for single event patients
+    }
+    
+    # Add new row to the data frame
+    data <- rbind(data, data.frame(id = i, start = start_time, stop = stop_time, 
+                                   rehospitalization = event, 
+                                   antipsychotics = medication$antipsychotic, 
+                                   AP_specifics = medication$AP_specific,
+                                   mood_stabilizers = mood_stabilizers[i], 
+                                   clozapine = clozapine[i], 
+                                   dose_group = dose_group[i],
+                                   age = age_adjusted,
+                                   i_start = i_start,
+                                   i_stop = i_stop))
+    
+    # Update current time
+    current_time <- stop_time
+    
+    # 80% chance to change medication for the next interval
+    if (runif(1) < 0.8) {
+      medication <- generate_medication()
+    }
+  }
+}
+
+
+# Check the structure and summary of the data
+View(data)
+summary(data)
+
+# Create the group variable by combining AP_specifics and dose_group
+data$group <- paste(data$AP_specific, data$dose_group, sep = " ")
+View(data)
+library(writexl)
+# Write data to Excel file
+write_xlsx(data, "D:/PhD projects/analysis methods/stratified cox/Stratified_simulation_data.xlsx")
+
+data$age <- as.factor(data$age)
+str(data)
+
+# Create age categories
+data$age_category <- cut(data$age, breaks = c(-Inf, 20, 30, 40, 50, 60, Inf), 
+                         labels = c("<=20", "21-30", "31-40", "41-50", "51-60", ">60"))
+
+# Calculate the number of rehospitalizations per patient
+rehosp_counts <- aggregate(rehospitalization ~ id, data, sum)
+
+# Create the relapse_rate variable
+rehosp_counts$relapse_rate <- ifelse(rehosp_counts$rehospitalization > 2, 1, 0)
+
+# Merge relapse_rate back to the main data
+data <- merge(data, rehosp_counts[, c("id", "relapse_rate")], by = "id")
+
+# Fit the Cox proportional hazards model
+model_3 <- coxph(Surv(start, stop, rehospitalization) ~ strata(id) + AP_specifics:strata(relapse_rate), data = data)
+
+# Summarize the model to inspect results
+summary(model_3)
