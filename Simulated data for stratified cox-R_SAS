@@ -118,3 +118,20 @@ model_3 <- coxph(Surv(start, stop, rehospitalization) ~ strata(id) + AP_specific
 
 # Summarize the model to inspect results
 summary(model_3)
+
+/*********************************************************************************************************************************************************/
+proc import datafile="C:/Users/user/Documents/nsfg_data.csv" out=nsfg
+dbms=csv replace;
+run;
+PROC PHREG DATA=nsfg NOSUMMARY;
+    CLASS drug_use (REF='Risperidone');
+    MODEL dur*birth(0) = pregordr age married passt nobreast lbw caesar multiple drug_use / TIES=EFRON;
+    STRATA caseid;
+RUN;
+
+# Convert drug_use to a factor and set the reference level
+nsfg$drug_use <- relevel(factor(nsfg$drug_use), ref = "Risperidone")
+# Fit the Cox proportional hazards model
+model_3 <- coxph(Surv(dur, birth==1) ~ strata(caseid) + drug_use + pregordr + age + married + passt + nobreast + lbw +
+                   caesar + multiple + college, data = nsfg)
+model_3
