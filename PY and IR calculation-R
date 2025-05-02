@@ -1,0 +1,88 @@
+/*import the cause of death data*/
+libname out "/userdata08/room373/data_out/data_out" compress=yes;
+
+/*step 1: merge with table final_cod_db to get the information of cause of death
+			select all people with death date from 2003-2012 to calculate the follow-up time from index date to death*/
+proc sql;
+	create table a.death as
+	select a.INDI_DSCM_NO, b.DTH_CODE1, b.DTH_CODE2, 
+			input(a.DTH_ASSMD_DT, yymmdd8.) as dth_date format=yymmdd10.
+	from raw.tg_dth as a
+	left join out.final_cod_db as b
+		on a.INDI_DSCM_NO = b.INDI_DSCM_NO_H
+	having year(dth_date) < 2012;
+quit;
+/**step 2: merge the targeted patients with death data to get the follow-up date from index_date to death*/
+
+/*1.Annual: PY*/
+proc sql;
+create table PY_annual as
+select a.INDI_DSCM_NO, a.age_cate, a.sex, a.index_date, a.final_F,			
+				b.DTH_ASSMD_DT, year(a.index_date) as annual_year,
+						case when a.INDI_DSCM_NO = b.INDI_DSCM_NO then min(input(b.DTH_ASSMD_DT, yymmdd8.),input("31122012", ddmmyy8.)) 
+								else input("31122012", ddmmyy8.)
+								end as end_fu format ddmmyy10., 
+								intck('days', index_date, min(intnx('year', index_date, 0, 'end'), calculated end_fu))/ 365.25 as PY_annual
+	from u_SIP2 as a 
+	left join raw.death as b
+	on a.INDI_DSCM_NO = b.INDI_DSCM_NO;
+quit;
+
+/*2. Total: PY*/
+proc sql;
+create table PY_total as
+select a.INDI_DSCM_NO, a.sex, a.age_cate, a.index_date, a.final_F,			
+				b.DTH_ASSMD_DT,
+				case when a.INDI_DSCM_NO = b.INDI_DSCM_NO then min(input(b.DTH_ASSMD_DT, yymmdd8.),input("31122012", ddmmyy8.)) 
+								else input("31122012", ddmmyy8.)
+								end as fu_dt format ddmmyy10.,  
+			(calculated fu_dt - a.index_date)/365.25 as PY_total
+	from u_SIP2 as a 
+	left join raw.death as b
+	on a.INDI_DSCM_NO = b.INDI_DSCM_NO;
+quit;
+
+
+
+%macro PY_annual (by_sex = 0, by_year=0, by_event =0);
+proc sql;
+	create table IR_annual as
+	select age_cate   %if &by_sex %then , sex;
+							 %if &by_year %then , annual_year;				
+						   	 %if &by_event %then , final_F;, 
+							 count(*) as cnt_case,
+							 sum(PY_annual) as PY,
+							(calculated cnt_case)/ sum(PY_annual) as IR_annual
+	from PY_annual
+	group by age_cate %if &by_sex %then , sex;
+							 %if &by_year %then , annual_year;				
+						   	 %if &by_event %then , final_F;;
+quit;
+%mend;
+%PY_annual;
+%PY_annual(by_sex = 1, by_year=0, by_event =0);
+%PY_annual(by_sex = 0, by_year=1, by_event =0);
+%PY_annual(by_sex = 0, by_year=0, by_event =1);
+%PY_annual(by_sex = 1, by_year=1, by_event =0);
+%PY_annual(by_sex = 1, by_year=0, by_event =1);
+%PY_annual(by_sex = 0, by_year=1, by_event =1);
+%PY_annual(by_sex = 1, by_year=1, by_event =1);
+
+
+%macro PY_total (by_sex = 0, by_event =0);
+proc sql;
+	create table IR_annual as
+	select age_cate   %if &by_sex %then , sex;
+							 %if &by_event %then , final_F;, 
+							 count(*) as cnt_case,
+							 sum(PY_total) as PY,
+							(calculated cnt_case)/ sum(PY_total) as IR_total
+	from PY_total
+	group by age_cate %if &by_sex %then , sex;
+						   	 %if &by_event %then , final_F;;
+quit;
+%mend;
+%PY_total;
+%PY_total(by_sex = 1, by_event =0);
+%PY_total(by_sex = 0, by_event =1);
+%PY_total(by_sex = 1, by_event =1);
