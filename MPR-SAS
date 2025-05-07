@@ -1,0 +1,50 @@
+%macro MPR(year,ab,data);
+
+/*Pick only the first year and first two year statements*/
+proc sql;
+	create table a.recov_mpr&year._&ab as
+	select b.*,a.indexdate, a.recov
+	from a.&data as a
+	left join a.t306020_0317 as b on a.INDI_DSCM_NO=b.INDI_DSCM_NO
+	where a.indexdate<=b.date<a.indexdate+365.25*&year;
+quit;
+
+proc sort data=a.recov_mpr&year._&ab out=mpr&year._&ab._s;
+/*The total number of administration days is not the same for each specification, so the longest total number of administration days is used*/
+	by CMN_KEY descending TOT_MCNT; 
+run;
+proc sort data=mpr&year._&ab._s out=mpr&year._&ab._u nodupkey;
+	by CMN_KEY;
+run;
+
+proc sql;
+	create table res_mpr&year._&ab as
+	select indi_dscm_no, recov, sum(TOT_MCNT) as tot_day, (calculated tot_day/(365*&year))*100 as MPR,
+			case when calculated MPR<20 then 1
+					when calculated MPR<40 then 2
+					when calculated MPR<60 then 3
+					when calculated MPR<80 then 4
+					when calculated MPR>=80 then 5
+					else 9 end as MPR_type
+	from mpr&year._&ab._u
+	group by indi_dscm_no, recov;
+quit;
+
+proc freq data=res_mpr&year._&ab;
+table MPR_type;
+run;
+
+proc tabulate data=res_mpr&year._&ab;
+class MPR_type recov;
+tables (MPR_type), recov*(n colpctn);
+run;
+
+proc freq data=res_mpr&year._&ab;
+table MPR_type*recov/ norow nopercent chisq noprint;
+run;
+
+%mend MPR;
+%MPR(1,a,fep_recov);
+%MPR(1,b,fep_b_recov);
+%MPR(2,a,fep_recov);
+%MPR(2,b,fep_b_recov); 
